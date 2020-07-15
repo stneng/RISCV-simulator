@@ -184,8 +184,8 @@ struct intermediate{
     unsigned int origin_ins;
     enum instruction ins;
     unsigned int rd,rd_value,rs1_value,rs2_value,imm,mem_p,pc;
-    int predictor;
-    intermediate():origin_ins(0),ins(ERROR),rd(0),rd_value(0),rs1_value(0),rs2_value(0),imm(0),mem_p(0),pc(0),predictor(0){}
+    int predictor;bool rd_done;
+    intermediate():origin_ins(0),ins(ERROR),rd(0),rd_value(0),rs1_value(0),rs2_value(0),imm(0),mem_p(0),pc(0),predictor(0),rd_done(false){}
 }IF_data,ID_data,EX_data,MEM_data;
 int pc;bool ID_busy,EX_busy,MEM_busy,WB_busy;
 int reg_busy[32],MEM_cycle;
@@ -202,10 +202,22 @@ void ID(){
     if (EX_busy || !ID_busy) return;
     if (IF_data.origin_ins==0xFF00513) return;
     ins ins=get_ins(IF_data.origin_ins);
-    if (ins.rs1 && reg_busy[ins.rs1]) return;
-    if (ins.rs2 && reg_busy[ins.rs2]) return;
     ID_data=IF_data;
-    ID_data.ins=ins.ins;ID_data.rd=ins.rd;ID_data.rs1_value=reg[ins.rs1];ID_data.rs2_value=reg[ins.rs2];ID_data.imm=ins.imm;
+    if (ins.rs1 && reg_busy[ins.rs1]) {
+        if (EX_data.rd==ins.rs1 && EX_data.rd_done) ID_data.rs1_value=EX_data.rd_value;
+        else if (MEM_data.rd==ins.rs1 && MEM_data.rd_done && EX_data.rd!=ins.rs1) ID_data.rs1_value=MEM_data.rd_value;
+        else return;
+    }else{
+        ID_data.rs1_value=reg[ins.rs1];
+    }
+    if (ins.rs2 && reg_busy[ins.rs2]) {
+        if (EX_data.rd==ins.rs2 && EX_data.rd_done) ID_data.rs2_value=EX_data.rd_value;
+        else if (MEM_data.rd==ins.rs2 && MEM_data.rd_done && EX_data.rd!=ins.rs2) ID_data.rs2_value=MEM_data.rd_value;
+        else return;
+    }else{
+        ID_data.rs2_value=reg[ins.rs2];
+    }
+    ID_data.ins=ins.ins;ID_data.rd=ins.rd;ID_data.imm=ins.imm;
     EX_busy=true;ID_busy=false;
     if (ins.rd) reg_busy[ins.rd]++;
     switch (ID_data.ins) {
@@ -223,10 +235,10 @@ void EX(){
     if (MEM_busy || !EX_busy) return;
     EX_data=ID_data;
     switch (ID_data.ins) {
-        case LUI:EX_data.rd_value=ID_data.imm;break;
-        case AUIPC:EX_data.rd_value=ID_data.pc+ID_data.imm;break;
-        case JAL:EX_data.rd_value=ID_data.pc+4;/*pc=ID_data.pc+ID_data.imm;ID_busy=false;*/break;
-        case JALR:EX_data.rd_value=ID_data.pc+4;/*pc=(ID_data.rs1_value+ID_data.imm)&(~1);ID_busy=false;*/break;
+        case LUI:EX_data.rd_value=ID_data.imm;EX_data.rd_done=true;break;
+        case AUIPC:EX_data.rd_value=ID_data.pc+ID_data.imm;EX_data.rd_done=true;break;
+        case JAL:EX_data.rd_value=ID_data.pc+4;EX_data.rd_done=true;/*pc=ID_data.pc+ID_data.imm;ID_busy=false;*/break;
+        case JALR:EX_data.rd_value=ID_data.pc+4;EX_data.rd_done=true;/*pc=(ID_data.rs1_value+ID_data.imm)&(~1);ID_busy=false;*/break;
         case BEQ:
             //if (ID_data.rs1_value==ID_data.rs2_value) pc=ID_data.pc+ID_data.imm;else pc=ID_data.pc+4;ID_busy=false;
             if (ID_data.rs1_value==ID_data.rs2_value){
@@ -300,25 +312,25 @@ void EX(){
             }
             break;
         case LB:case LH:case LW:case LBU:case LHU:case SB:case SH:case SW:EX_data.mem_p=ID_data.rs1_value+ID_data.imm;break;
-        case ADDI:EX_data.rd_value=ID_data.rs1_value+ID_data.imm;break;
-        case SLTI:EX_data.rd_value=(int)ID_data.rs1_value<(int)ID_data.imm;break;
-        case SLTIU:EX_data.rd_value=ID_data.rs1_value<ID_data.imm;break;
-        case XORI:EX_data.rd_value=ID_data.rs1_value^ID_data.imm;break;
-        case ORI:EX_data.rd_value=ID_data.rs1_value|ID_data.imm;break;
-        case ANDI:EX_data.rd_value=ID_data.rs1_value&ID_data.imm;break;
-        case SLLI:EX_data.rd_value=ID_data.rs1_value<<(ID_data.imm&0x1F);break;
-        case SRLI:EX_data.rd_value=ID_data.rs1_value>>(ID_data.imm&0x1F);break;
-        case SRAI:EX_data.rd_value=(int)ID_data.rs1_value>>(ID_data.imm&0x1F);break;
-        case ADD:EX_data.rd_value=ID_data.rs1_value+ID_data.rs2_value;break;
-        case SUB:EX_data.rd_value=ID_data.rs1_value-ID_data.rs2_value;break;
-        case SLL:EX_data.rd_value=ID_data.rs1_value<<(ID_data.rs2_value&0x1F);break;
-        case SLT:EX_data.rd_value=(int)ID_data.rs1_value<(int)ID_data.rs2_value;break;
-        case SLTU:EX_data.rd_value=ID_data.rs1_value<ID_data.rs2_value;break;
-        case XOR:EX_data.rd_value=ID_data.rs1_value^ID_data.rs2_value;break;
-        case SRL:EX_data.rd_value=ID_data.rs1_value>>(ID_data.rs2_value&0x1F);break;
-        case SRA:EX_data.rd_value=(int)ID_data.rs1_value>>(ID_data.rs2_value&0x1F);break;
-        case OR:EX_data.rd_value=ID_data.rs1_value|ID_data.rs2_value;break;
-        case AND:EX_data.rd_value=ID_data.rs1_value&ID_data.rs2_value;break;
+        case ADDI:EX_data.rd_value=ID_data.rs1_value+ID_data.imm;EX_data.rd_done=true;break;
+        case SLTI:EX_data.rd_value=(int)ID_data.rs1_value<(int)ID_data.imm;EX_data.rd_done=true;break;
+        case SLTIU:EX_data.rd_value=ID_data.rs1_value<ID_data.imm;EX_data.rd_done=true;break;
+        case XORI:EX_data.rd_value=ID_data.rs1_value^ID_data.imm;EX_data.rd_done=true;break;
+        case ORI:EX_data.rd_value=ID_data.rs1_value|ID_data.imm;EX_data.rd_done=true;break;
+        case ANDI:EX_data.rd_value=ID_data.rs1_value&ID_data.imm;EX_data.rd_done=true;break;
+        case SLLI:EX_data.rd_value=ID_data.rs1_value<<(ID_data.imm&0x1F);EX_data.rd_done=true;break;
+        case SRLI:EX_data.rd_value=ID_data.rs1_value>>(ID_data.imm&0x1F);EX_data.rd_done=true;break;
+        case SRAI:EX_data.rd_value=(int)ID_data.rs1_value>>(ID_data.imm&0x1F);EX_data.rd_done=true;break;
+        case ADD:EX_data.rd_value=ID_data.rs1_value+ID_data.rs2_value;EX_data.rd_done=true;break;
+        case SUB:EX_data.rd_value=ID_data.rs1_value-ID_data.rs2_value;EX_data.rd_done=true;break;
+        case SLL:EX_data.rd_value=ID_data.rs1_value<<(ID_data.rs2_value&0x1F);EX_data.rd_done=true;break;
+        case SLT:EX_data.rd_value=(int)ID_data.rs1_value<(int)ID_data.rs2_value;EX_data.rd_done=true;break;
+        case SLTU:EX_data.rd_value=ID_data.rs1_value<ID_data.rs2_value;EX_data.rd_done=true;break;
+        case XOR:EX_data.rd_value=ID_data.rs1_value^ID_data.rs2_value;EX_data.rd_done=true;break;
+        case SRL:EX_data.rd_value=ID_data.rs1_value>>(ID_data.rs2_value&0x1F);EX_data.rd_done=true;break;
+        case SRA:EX_data.rd_value=(int)ID_data.rs1_value>>(ID_data.rs2_value&0x1F);EX_data.rd_done=true;break;
+        case OR:EX_data.rd_value=ID_data.rs1_value|ID_data.rs2_value;EX_data.rd_done=true;break;
+        case AND:EX_data.rd_value=ID_data.rs1_value&ID_data.rs2_value;EX_data.rd_done=true;break;
         default:break;
     }
     MEM_busy=true;EX_busy=false;
@@ -333,11 +345,11 @@ void MEM(){
                 MEM_cycle++;
             }else{
                 switch (EX_data.ins) {
-                    case LB:MEM_data.rd_value=(char)(unsigned int)mem[EX_data.mem_p];break;
-                    case LH:MEM_data.rd_value=(short)(((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8));break;
-                    case LW:MEM_data.rd_value=((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8)|((unsigned int)mem[EX_data.mem_p+2]<<16)|((unsigned int)mem[EX_data.mem_p+3]<<24);break;
-                    case LBU:MEM_data.rd_value=(unsigned int)mem[EX_data.mem_p];break;
-                    case LHU:MEM_data.rd_value=((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8);break;
+                    case LB:MEM_data.rd_value=(char)(unsigned int)mem[EX_data.mem_p];MEM_data.rd_done=true;break;
+                    case LH:MEM_data.rd_value=(short)(((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8));MEM_data.rd_done=true;break;
+                    case LW:MEM_data.rd_value=((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8)|((unsigned int)mem[EX_data.mem_p+2]<<16)|((unsigned int)mem[EX_data.mem_p+3]<<24);MEM_data.rd_done=true;break;
+                    case LBU:MEM_data.rd_value=(unsigned int)mem[EX_data.mem_p];MEM_data.rd_done=true;break;
+                    case LHU:MEM_data.rd_value=((unsigned int)mem[EX_data.mem_p])|((unsigned int)mem[EX_data.mem_p+1]<<8);MEM_data.rd_done=true;break;
                     case SB:mem[EX_data.mem_p]=EX_data.rs2_value&0xFF;break;
                     case SH:mem[EX_data.mem_p]=EX_data.rs2_value&0xFF;mem[EX_data.mem_p+1]=(EX_data.rs2_value>>8)&0xFF;break;
                     case SW:mem[EX_data.mem_p]=EX_data.rs2_value&0xFF;mem[EX_data.mem_p+1]=(EX_data.rs2_value>>8)&0xFF;mem[EX_data.mem_p+2]=(EX_data.rs2_value>>16)&0xFF;mem[EX_data.mem_p+3]=(EX_data.rs2_value>>24)&0xFF;break;
